@@ -169,10 +169,8 @@ function M.accept_word()
     return M.accept()
   end
 
-  -- Include the delimiter if it's whitespace
-  if M._text:sub(word_end, word_end):match("%s") then
-    word_end = word_end
-  else
+  -- Include the delimiter if it's whitespace, otherwise stop before punctuation
+  if not M._text:sub(word_end, word_end):match("%s") then
     word_end = word_end - 1
   end
 
