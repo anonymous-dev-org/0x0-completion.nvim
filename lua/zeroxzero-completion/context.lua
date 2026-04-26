@@ -1,97 +1,50 @@
-local config = require("zeroxzero-completion.config")
+--- Buffer context gathering for code completion.
+--- Extracts prefix (before cursor) and suffix (after cursor) from the current buffer.
 
 local M = {}
 
----@class zeroxzero_completion.Context
----@field prefix string
----@field suffix string
----@field language string
----@field filename string
----@field line number
----@field col number
+--- Maximum lines to include in prefix/suffix.
+local MAX_PREFIX_LINES = 1500
+local MAX_SUFFIX_LINES = 500
 
-local ft_to_lang = {
-  typescript = "typescript",
-  typescriptreact = "typescriptreact",
-  javascript = "javascript",
-  javascriptreact = "javascriptreact",
-  python = "python",
-  lua = "lua",
-  rust = "rust",
-  go = "go",
-  c = "c",
-  cpp = "cpp",
-  java = "java",
-  ruby = "ruby",
-  php = "php",
-  swift = "swift",
-  kotlin = "kotlin",
-  scala = "scala",
-  zig = "zig",
-  bash = "bash",
-  sh = "sh",
-  zsh = "zsh",
-  css = "css",
-  html = "html",
-  json = "json",
-  yaml = "yaml",
-  toml = "toml",
-  markdown = "markdown",
-  vim = "vim",
-}
-
----@return zeroxzero_completion.Context?
-function M.get_context()
-  local cfg = config.current
+--- Gather context from the current buffer at the cursor position.
+---@return { prefix: string, suffix: string, language: string, filepath: string }
+function M.gather()
   local bufnr = vim.api.nvim_get_current_buf()
   local cursor = vim.api.nvim_win_get_cursor(0)
   local row = cursor[1] -- 1-indexed
-  local col = cursor[2] -- 0-indexed byte offset
+  local col = cursor[2] -- 0-indexed
 
-  local total_lines = vim.api.nvim_buf_line_count(bufnr)
-  if total_lines == 0 then
-    return nil
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local total = #lines
+
+  -- Current line split at cursor position
+  local current_line = lines[row] or ""
+  local before_cursor = current_line:sub(1, col)
+  local after_cursor = current_line:sub(col + 1)
+
+  -- Build prefix: lines before current + current line up to cursor
+  local prefix_start = math.max(1, row - MAX_PREFIX_LINES)
+  local prefix_parts = {}
+  for i = prefix_start, row - 1 do
+    table.insert(prefix_parts, lines[i])
   end
+  table.insert(prefix_parts, before_cursor)
+  local prefix = table.concat(prefix_parts, "\n")
 
-  -- Prefix: lines before cursor + current line up to cursor
-  local prefix_start = math.max(1, row - cfg.max_prefix_lines)
-  local prefix_lines = vim.api.nvim_buf_get_lines(bufnr, prefix_start - 1, row, false)
-  if #prefix_lines > 0 then
-    -- Truncate last line at cursor column
-    local last = prefix_lines[#prefix_lines]
-    prefix_lines[#prefix_lines] = last:sub(1, col)
+  -- Build suffix: rest of current line + lines after cursor
+  local suffix_end = math.min(total, row + MAX_SUFFIX_LINES)
+  local suffix_parts = { after_cursor }
+  for i = row + 1, suffix_end do
+    table.insert(suffix_parts, lines[i])
   end
-  local prefix = table.concat(prefix_lines, "\n")
-
-  -- Suffix: rest of current line after cursor + lines after cursor
-  local suffix_end = math.min(total_lines, row + cfg.max_suffix_lines)
-  local suffix_lines = vim.api.nvim_buf_get_lines(bufnr, row - 1, suffix_end, false)
-  if #suffix_lines > 0 then
-    -- First line starts after cursor
-    local first = suffix_lines[1]
-    suffix_lines[1] = first:sub(col + 1)
-  end
-  local suffix = table.concat(suffix_lines, "\n")
-
-  if prefix == "" and suffix == "" then
-    return nil
-  end
-
-  local ft = vim.bo[bufnr].filetype
-  local language = ft_to_lang[ft] or ft
-
-  local filename = vim.api.nvim_buf_get_name(bufnr)
-  if filename ~= "" then
-    filename = vim.fn.fnamemodify(filename, ":~:.")
-  end
+  local suffix = table.concat(suffix_parts, "\n")
 
   return {
     prefix = prefix,
     suffix = suffix,
-    language = language,
-    filename = filename,
-    line = row,
-    col = col,
+    language = vim.bo[bufnr].filetype,
+    filepath = vim.api.nvim_buf_get_name(bufnr),
   }
 end
 

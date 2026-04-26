@@ -1,280 +1,159 @@
+--- Ghost text rendering using Neovim extmarks.
+--- Displays completion suggestions as gray inline virtual text.
+
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("zeroxzero_completion")
 
----@type string
-M._text = ""
----@type number?
-M._extmark_id = nil
----@type number?
-M._bufnr = nil
----@type number?
-M._row = nil
----@type number?
-M._col = nil
+---@class zeroxzero_completion.GhostState
+---@field bufnr integer
+---@field row integer 0-based
+---@field col integer 0-based
+---@field text string Full completion text
+---@field extmark_ids integer[]
 
----@return boolean
-function M.is_visible()
-  return M._extmark_id ~= nil
+---@type zeroxzero_completion.GhostState?
+local _state = nil
+
+--- Set up highlight groups.
+local function setup_highlights()
+  vim.api.nvim_set_hl(0, "ZeroCompletionGhost", { link = "Comment", default = true })
 end
 
----Show ghost text at the current cursor position
----@param text string
-function M.show(text)
-  M.clear()
-
-  if not text or text == "" then
+--- Show ghost text at the current cursor position.
+---@param bufnr integer
+---@param row integer 0-based
+---@param col integer 0-based
+---@param text string The completion text to display
+function M.show(bufnr, row, col, text)
+  if text == "" then
     return
   end
 
-  local bufnr = vim.api.nvim_get_current_buf()
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local row = cursor[1] - 1 -- 0-indexed
-  local col = cursor[2]
-
-  M._text = text
-  M._bufnr = bufnr
-  M._row = row
-  M._col = col
+  setup_highlights()
+  M.clear()
 
   local lines = vim.split(text, "\n", { plain = true })
+  if #lines == 0 then
+    return
+  end
 
-  -- Get the text after cursor on the current line for overlay
-  local current_line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-  local suffix_on_line = current_line:sub(col + 1)
-
-  -- Build extmark options
-  local opts = {
-    hl_mode = "combine",
+  _state = {
+    bufnr = bufnr,
+    row = row,
+    col = col,
+    text = text,
+    extmark_ids = {},
   }
 
-  -- First line: overlay virtual text (replaces visual rendering from cursor onward)
-  local first_line_text = lines[1] .. suffix_on_line
-  opts.virt_text = { { first_line_text, "ZeroCompletion" } }
-  opts.virt_text_pos = "overlay"
+  -- First line: inline virtual text after cursor
+  local first_line = lines[1]
+  local virt_text = { { first_line, "ZeroCompletionGhost" } }
 
-  -- Additional lines: virtual lines below
+  -- Multi-line: remaining lines as virt_lines below
+  local virt_lines = nil
   if #lines > 1 then
-    local virt_lines = {}
+    virt_lines = {}
     for i = 2, #lines do
-      table.insert(virt_lines, { { lines[i], "ZeroCompletion" } })
+      table.insert(virt_lines, { { lines[i], "ZeroCompletionGhost" } })
     end
-    opts.virt_lines = virt_lines
   end
 
-  M._extmark_id = vim.api.nvim_buf_set_extmark(bufnr, ns, row, col, opts)
-end
-
----Append delta text to the current ghost (streaming incremental update)
----@param delta string
-function M.append(delta)
-  M._text = M._text .. delta
-
-  -- Initialize position on first append (streaming path)
-  if not M._bufnr then
-    M._bufnr = vim.api.nvim_get_current_buf()
-    local cursor = vim.api.nvim_win_get_cursor(0)
-    M._row = cursor[1] - 1 -- 0-indexed
-    M._col = cursor[2]
+  local extmark_opts = {
+    virt_text = virt_text,
+    virt_text_pos = "inline",
+    priority = 1000,
+  }
+  if virt_lines then
+    extmark_opts.virt_lines = virt_lines
   end
 
-  if M._bufnr and M._row and M._col then
-    -- Re-render at original position
-    local old_id = M._extmark_id
-    local bufnr = M._bufnr
-    local row = M._row
-    local col = M._col
-
-    if old_id then
-      vim.api.nvim_buf_del_extmark(bufnr, ns, old_id)
-    end
-
-    local text = M._text
-    local lines = vim.split(text, "\n", { plain = true })
-    local current_line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-    local suffix_on_line = current_line:sub(col + 1)
-
-    local opts = {
-      hl_mode = "combine",
-      virt_text = { { lines[1] .. suffix_on_line, "ZeroCompletion" } },
-      virt_text_pos = "overlay",
-    }
-
-    if #lines > 1 then
-      local virt_lines = {}
-      for i = 2, #lines do
-        table.insert(virt_lines, { { lines[i], "ZeroCompletion" } })
-      end
-      opts.virt_lines = virt_lines
-    end
-
-    M._extmark_id = vim.api.nvim_buf_set_extmark(bufnr, ns, row, col, opts)
+  local ok, id = pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, col, extmark_opts)
+  if ok then
+    table.insert(_state.extmark_ids, id)
   end
 end
 
----Accept the full ghost text — insert it into the buffer
+--- Update the ghost text with new content (for streaming updates).
+---@param text string
+function M.update(text)
+  if not _state then
+    return
+  end
+  M.show(_state.bufnr, _state.row, _state.col, text)
+end
+
+--- Clear all ghost text.
+function M.clear()
+  if _state then
+    vim.api.nvim_buf_clear_namespace(_state.bufnr, ns, 0, -1)
+    _state = nil
+  end
+end
+
+--- Accept the ghost text — insert it into the buffer.
+---@return boolean true if text was accepted
 function M.accept()
-  if not M.is_visible() or M._text == "" then
+  if not _state then
     return false
   end
 
-  local bufnr = M._bufnr
-  local row = M._row
-  local col = M._col
-  local text = M._text
+  local bufnr = _state.bufnr
+  local row = _state.row
+  local col = _state.col
+  local text = _state.text
 
   M.clear()
-
-  if not bufnr or not row or not col then
-    return false
-  end
 
   local lines = vim.split(text, "\n", { plain = true })
-  local current_line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-  local before = current_line:sub(1, col)
-  local after = current_line:sub(col + 1)
+  vim.api.nvim_buf_set_text(bufnr, row, col, row, col, lines)
 
-  -- Build replacement lines
-  local new_lines = {}
-  for i, line in ipairs(lines) do
-    if i == 1 then
-      table.insert(new_lines, before .. line)
-    else
-      table.insert(new_lines, line)
-    end
+  -- Move cursor to end of inserted text
+  local new_row = row + #lines - 1
+  local new_col
+  if #lines == 1 then
+    new_col = col + #lines[1]
+  else
+    new_col = #lines[#lines]
   end
-  -- Append suffix to last line
-  new_lines[#new_lines] = new_lines[#new_lines] .. after
-
-  vim.api.nvim_buf_set_lines(bufnr, row, row + 1, false, new_lines)
-
-  -- Move cursor to end of inserted text (before the suffix)
-  local end_row = row + #lines - 1
-  local end_col = #lines == 1 and (col + #lines[1]) or #lines[#lines]
-  vim.api.nvim_win_set_cursor(0, { end_row + 1, end_col })
+  vim.api.nvim_win_set_cursor(0, { new_row + 1, new_col })
 
   return true
 end
 
----Accept just the first word of the ghost text
-function M.accept_word()
-  if not M.is_visible() or M._text == "" then
-    return false
-  end
-
-  -- Find the first word boundary
-  local word_end = M._text:find("[%s%p]")
-  if not word_end then
-    -- Entire text is one word
-    return M.accept()
-  end
-
-  -- Include the delimiter if it's whitespace, otherwise stop before punctuation
-  if not M._text:sub(word_end, word_end):match("%s") then
-    word_end = word_end - 1
-  end
-
-  if word_end < 1 then
-    word_end = 1
-  end
-
-  local word = M._text:sub(1, word_end)
-  local remainder = M._text:sub(word_end + 1)
-
-  local bufnr = M._bufnr
-  local row = M._row
-  local col = M._col
-
-  M.clear()
-
-  if not bufnr or not row or not col then
-    return false
-  end
-
-  -- Insert the word
-  local current_line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-  local before = current_line:sub(1, col)
-  local after = current_line:sub(col + 1)
-
-  local word_lines = vim.split(word, "\n", { plain = true })
-  local new_lines = {}
-  for i, line in ipairs(word_lines) do
-    if i == 1 then
-      table.insert(new_lines, before .. line)
-    else
-      table.insert(new_lines, line)
-    end
-  end
-  new_lines[#new_lines] = new_lines[#new_lines] .. after
-
-  vim.api.nvim_buf_set_lines(bufnr, row, row + 1, false, new_lines)
-
-  local end_row = row + #word_lines - 1
-  local end_col = #word_lines == 1 and (col + #word_lines[1]) or #word_lines[#word_lines]
-  vim.api.nvim_win_set_cursor(0, { end_row + 1, end_col })
-
-  -- Show remainder as ghost if any
-  if remainder ~= "" then
-    vim.schedule(function()
-      M.show(remainder)
-    end)
-  end
-
-  return true
-end
-
----Accept just the first line of the ghost text
+--- Accept only the first line of the ghost text.
+---@return boolean true if text was accepted
 function M.accept_line()
-  if not M.is_visible() or M._text == "" then
+  if not _state then
     return false
   end
 
-  local newline_pos = M._text:find("\n")
-  if not newline_pos then
-    return M.accept()
-  end
+  local bufnr = _state.bufnr
+  local row = _state.row
+  local col = _state.col
+  local text = _state.text
 
-  local first_line = M._text:sub(1, newline_pos - 1)
-  local remainder = M._text:sub(newline_pos + 1)
-
-  local bufnr = M._bufnr
-  local row = M._row
-  local col = M._col
+  local lines = vim.split(text, "\n", { plain = true })
+  local first_line = lines[1] or ""
 
   M.clear()
 
-  if not bufnr or not row or not col then
-    return false
-  end
-
-  -- Insert the first line
-  local current_line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-  local before = current_line:sub(1, col)
-  local after = current_line:sub(col + 1)
-
-  vim.api.nvim_buf_set_lines(bufnr, row, row + 1, false, { before .. first_line .. after })
+  vim.api.nvim_buf_set_text(bufnr, row, col, row, col, { first_line })
   vim.api.nvim_win_set_cursor(0, { row + 1, col + #first_line })
 
-  -- Show remainder as ghost if any
-  if remainder ~= "" then
-    vim.schedule(function()
-      M.show(remainder)
-    end)
-  end
-
   return true
 end
 
----Clear ghost text
-function M.clear()
-  if M._extmark_id and M._bufnr then
-    pcall(vim.api.nvim_buf_del_extmark, M._bufnr, ns, M._extmark_id)
-  end
-  M._extmark_id = nil
-  M._bufnr = nil
-  M._row = nil
-  M._col = nil
-  M._text = ""
+--- Check if ghost text is currently visible.
+---@return boolean
+function M.is_visible()
+  return _state ~= nil
+end
+
+--- Get the current ghost text.
+---@return string?
+function M.get_text()
+  return _state and _state.text
 end
 
 return M

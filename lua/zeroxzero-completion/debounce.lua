@@ -1,32 +1,34 @@
+--- Debounce timer utility for completion triggers.
+
 local M = {}
 
----Create a debounced function
----@param fn function
----@param delay_ms number
----@return fun() trigger, fun() cancel, fun() close
-function M.create(fn, delay_ms)
-  local timer = vim.uv.new_timer()
+---@type uv_timer_t?
+local _timer = nil
 
-  local function trigger()
-    timer:stop()
-    timer:start(delay_ms, 0, function()
-      timer:stop()
-      vim.schedule(fn)
-    end)
-  end
+--- Start or restart a debounced timer.
+---@param ms integer Delay in milliseconds
+---@param callback fun() Function to call after delay
+function M.start(ms, callback)
+  M.stop()
+  _timer = vim.uv.new_timer()
+  _timer:start(ms, 0, vim.schedule_wrap(callback))
+end
 
-  local function cancel()
-    timer:stop()
-  end
-
-  local function close()
-    timer:stop()
-    if not timer:is_closing() then
-      timer:close()
+--- Stop the debounce timer.
+function M.stop()
+  if _timer then
+    if not _timer:is_closing() then
+      _timer:stop()
+      _timer:close()
     end
+    _timer = nil
   end
+end
 
-  return trigger, cancel, close
+--- Check if a timer is currently running.
+---@return boolean
+function M.is_pending()
+  return _timer ~= nil and _timer:is_active()
 end
 
 return M

@@ -1,61 +1,63 @@
+--- Configuration for the 0x0-completion plugin.
+
 local M = {}
 
 ---@class zeroxzero_completion.Config
----@field server_url string?
----@field auth zeroxzero_completion.AuthConfig?
----@field model string
----@field max_tokens number
----@field debounce_ms number
----@field max_prefix_lines number
----@field max_suffix_lines number
----@field cache_size number
----@field disabled_filetypes table<string, boolean>
----@field keymaps zeroxzero_completion.KeymapConfig
+---@field server_url string
+---@field provider? string
+---@field model? string
+---@field debounce_ms integer
+---@field max_tokens integer
+---@field temperature number
+---@field keymaps zeroxzero_completion.Keymaps
+---@field filetypes zeroxzero_completion.Filetypes
+---@field cache zeroxzero_completion.CacheConfig
+---@field enabled boolean
 
----@class zeroxzero_completion.AuthConfig
----@field username string
----@field password string
-
----@class zeroxzero_completion.KeymapConfig
+---@class zeroxzero_completion.Keymaps
 ---@field accept string
----@field dismiss string
----@field accept_word string
 ---@field accept_line string
----@field toggle string
+---@field dismiss string
+
+---@class zeroxzero_completion.Filetypes
+---@field exclude string[]
+
+---@class zeroxzero_completion.CacheConfig
+---@field enabled boolean
+---@field max_entries integer
 
 ---@type zeroxzero_completion.Config
 M.defaults = {
-  server_url = nil,
-  auth = nil,
-  model = "claude-haiku-4-5-20251001",
-  max_tokens = 256,
+  server_url = "http://localhost:4096",
+  provider = nil,
+  model = nil,
   debounce_ms = 150,
-  max_prefix_lines = 100,
-  max_suffix_lines = 50,
-  cache_size = 64,
-  disabled_filetypes = {
-    TelescopePrompt = true,
-    NvimTree = true,
-    lazy = true,
-    mason = true,
-    help = true,
-    [""] = true,
-  },
+  max_tokens = 128,
+  temperature = 0,
+  enabled = true,
   keymaps = {
     accept = "<Tab>",
+    accept_line = "<C-e>",
     dismiss = "<C-]>",
-    accept_word = "<M-w>",
-    accept_line = "<M-l>",
-    toggle = "<M-Bslash>",
+  },
+  filetypes = {
+    exclude = { "TelescopePrompt", "NvimTree", "help", "qf", "alpha", "dashboard" },
+  },
+  cache = {
+    enabled = true,
+    max_entries = 100,
   },
 }
 
 ---@type zeroxzero_completion.Config
 M.current = vim.deepcopy(M.defaults)
 
+--- Apply user configuration.
 ---@param opts? table
 function M.setup(opts)
-  M.current = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+  if opts then
+    M.current = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+  end
 end
 
 return M
